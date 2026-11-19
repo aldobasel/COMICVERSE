@@ -1,0 +1,11 @@
+{
+  "id": "comic-verse",
+  "name": "Comic Verse",
+  "version": "1.0.0",
+  "lang": "ar",
+  "nsfw": false,
+  "entry": "comic-verse.plugin.js",
+  "icon": "https://arcomixverse.blogspot.com/favicon.ico",
+  "description": "Arabic comics from Comic Verse",
+  "website": "https://arcomixverse.blogspot.com"
+}

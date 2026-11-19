@@ -1,0 +1,108 @@
+name: Sync Upstream Manga Plugins
+
+on:
+  schedule:
+    # Runs daily at 06:00 UTC
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+  issues: write
+
+concurrency:
+  group: 'upstream-sync'
+  cancel-in-progress: true
+
+jobs:
+  sync-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Typecheck Sources
+        run: npm run typecheck
+
+      - name: Sync & Convert Upstream Plugins
+        run: npm run sync-upstream
+
+      - name: Build Repositories & Static Assets
+        run: npm run build
+
+      - name: Validate All Manifests & Bundles
+        run: npm run validate
+
+      - name: Update gate (hold back regressions)
+        timeout-minutes: 25
+        run: npm run gate
+
+      - name: Open or update fallback alert
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          REPORT=dist/manga/sync-report.json
+          if [ -f "$REPORT" ]; then
+            R=$(jq '(.restored // []) | length' "$REPORT")
+            H=$(jq '(.held // []) | length' "$REPORT")
+            if [ "$R" -gt 0 ] || [ "$H" -gt 0 ]; then
+              {
+                echo "Automatic safeguards kicked in during the latest sync."
+                if [ "$R" -gt 0 ]; then
+                  echo
+                  echo "Restored from last known good (upstream failed or removed them):"
+                  jq -r '.restored[] | "- " + .id + " (v" + .version + "): " + .reason' "$REPORT"
+                fi
+                if [ "$H" -gt 0 ]; then
+                  echo
+                  echo "Held back (the new version tested worse than the current one):"
+                  jq -r '.held[] | "- " + .id + ": kept v" + .oldVersion + ", skipped v" + .newVersion + " (score " + (.oldScore | tostring) + " -> " + (.newScore | tostring) + " out of 5)"' "$REPORT"
+                fi
+              } > alert-body.md
+              EXISTING=$(gh issue list --state open --search "Sync fallback in:title" --json number --jq '.[0].number // empty')
+              if [ -n "$EXISTING" ]; then
+                gh issue comment "$EXISTING" --body-file alert-body.md
+              else
+                gh issue create --title "Sync fallback: sources restored or held back" --body-file alert-body.md
+              fi
+              rm -f alert-body.md
+            fi
+          fi
+
+      - name: Commit & Push Changes
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Stage generated manifests and dist artifacts if committing to main
+          git add config/ dist/ plugins/
+          if git diff --cached --quiet; then
+            echo "No upstream changes detected. Everything is up to date."
+          else
+            git commit -m "chore(upstream): auto-sync plugins from inkdex [skip ci]"
+            git push origin main
+          fi
+
+      - name: Setup GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: './dist'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
