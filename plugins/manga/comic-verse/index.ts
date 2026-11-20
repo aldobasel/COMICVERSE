@@ -142,7 +142,7 @@ function directScriptById(html, id) {
   const open = new RegExp("<([a-z][\\w:-]*)\\b[^>]*\\bid\\s*=\\s*([\\\"'])" + id + "\\2[^>]*>", "i").exec(html);
   if (!open) return null;
   const rest = html.slice(open.index + open[0].length);
-  const script = /^\\s*<script\\b([^>]*)>([\\s\\S]*?)<\\/script\\s*>/i.exec(rest);
+  const script = /^\s*<script\b([^>]*)>([\s\S]*?)<\/script\s*>/i.exec(rest);
   if (!script) return null;
   return { attributes: script[1] || "", content: script[2] || "" };
 }
@@ -155,14 +155,14 @@ function attributeValue(attributes, name) {
 function resolveChapterFeed(rawHtml, dataLabel) {
   const primary = directScriptById(rawHtml, "clwd");
   if (primary) {
-    const match = /clwd\\.run\\([\\\"'](.*?)[\\\"']\\)/.exec(primary.content);
+    const match = /clwd\.run\([\"'](.*?)[\"']\)/.exec(primary.content);
     return chapterFeedUrl(match ? match[1] : dataLabel);
   }
 
   const legacy = directScriptById(rawHtml, "myUL");
   if (legacy) {
     const src = attributeValue(legacy.attributes, "src");
-    const match = /([^']+)\\?/.exec(src);
+    const match = /([^']+)\?/.exec(src);
     if (match) {
       const url = new URL(match[1], BASE);
       url.searchParams.set("alt", "json");
@@ -172,7 +172,7 @@ function resolveChapterFeed(rawHtml, dataLabel) {
 
   const latest = directScriptById(rawHtml, "latest");
   if (latest) {
-    const match = /label\\s*=\\s*'([^']+)'/.exec(latest.content);
+    const match = /label\s*=\s*'([^']+)'/.exec(latest.content);
     if (match) {
       const url = feedUrl("/-/" + encodeURIComponent(match[1]));
       url.searchParams.set("alt", "json");
