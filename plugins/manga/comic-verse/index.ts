@@ -168,16 +168,16 @@ export const plugin: MangaProvider = {
     const pages: string[] = [];
 
     for (const tag of tags) {
-      const filename = tag.match(
-        /(?:src|data-src|data-original)=["']([^"']+)["']/i
+      const match = tag.match(
+        /(?:src|data-src|data-original|data-lazy-src)=["']([^"']+)["']/i
       );
 
-      if (!filename) continue;
+      if (!match) continue;
 
-      const url = filename[1].replace(/&amp;/g, '&');
+      const url = match[1].replace(/&amp;/g, '&');
 
-      // Comic page images use filenames such as P00001.jpg
-      if (!/\/P\d+\.(?:jpg|jpeg|png|webp)(?:\?|$)/i.test(url)) {
+      // Supports 000.jpg, 001a.jpg and P00001.jpg
+      if (!/\/(?:P?\d+[a-z]?)\.(?:jpg|jpeg|png|webp)(?:\?|$)/i.test(url)) {
         continue;
       }
 
