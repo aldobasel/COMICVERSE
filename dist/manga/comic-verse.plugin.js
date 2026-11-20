@@ -135,47 +135,55 @@ var plugin = (() => {
     },
 
     async pageUrls(chapterId) {
-      harbor.log("[Comic Verse] pageUrls start", chapterId);
-      let response;
+      const extractImages = html => {
+        const pages = [];
+        const marker = html.search(/id=["']cvOriginal["']/i);
+        const readerHtml = marker >= 0 ? html.slice(marker) : html;
+        const tags = readerHtml.match(/<(?:img|a)\b[^>]*>/gi) || [];
+        for (const tag of tags) {
+          const attrs = tag.matchAll(/(?:data-src|data-original|data-lazy-src|src|href)=["']([^"']+)["']/gi);
+          for (const attr of attrs) {
+            const url = attr[1].replace(/&amp;/g, "&").trim();
+            if (!/^https?:\/\//i.test(url)) continue;
+            if (!/(?:blogger\.googleusercontent\.com|bp\.blogspot\.com)/i.test(url)) continue;
+            if (!pages.includes(url)) pages.push(url);
+          }
+        }
+        return pages;
+      };
+
+      let pageError = "";
       try {
-        response = await harbor.http(chapterId, {
+        const response = await harbor.http(chapterId, {
           responseType: "text",
           timeoutMs: 30000
         });
-      } catch (error) {
-        harbor.log("[Comic Verse] chapter request failed", String(error));
-        throw new Error("Comic Verse: chapter request failed: " + String(error));
-      }
-
-      const html = response.body || "";
-      const marker = html.search(/id=["']cvOriginal["']/i);
-      harbor.log("[Comic Verse] response", response.status, "length", html.length, "reader marker", marker);
-
-      if (!response.ok) {
-        throw new Error("Comic Verse: HTTP " + response.status);
-      }
-
-      const readerHtml = marker >= 0 ? html.slice(marker) : html;
-      const tags = readerHtml.match(/<(?:img|a)\b[^>]*>/gi) || [];
-      const pages = [];
-
-      for (const tag of tags) {
-        const attrs = tag.matchAll(/(?:data-src|data-original|data-lazy-src|src|href)=["']([^"']+)["']/gi);
-        for (const match of attrs) {
-          const url = match[1].replace(/&amp;/g, "&").trim();
-          if (!/^https?:\/\//i.test(url)) continue;
-          if (!/(?:blogger\.googleusercontent\.com|bp\.blogspot\.com)/i.test(url)) continue;
-          if (!pages.includes(url)) pages.push(url);
+        if (response.ok) {
+          const pages = extractImages(response.body || "");
+          if (pages.length) return pages;
+          pageError = "chapter page had no reader images (HTTP " + response.status + ", body " + (response.body || "").length + " chars)";
+        } else {
+          pageError = "chapter page returned HTTP " + response.status;
         }
+      } catch (error) {
+        pageError = String(error);
       }
 
-      harbor.log("[Comic Verse] reader tags", tags.length, "image urls", pages.length, "first urls", pages.slice(0, 3));
-
-      if (pages.length === 0) {
-        throw new Error("Comic Verse: no Blogger reader images found (html=" + html.length + ", marker=" + marker + ", tags=" + tags.length + ")");
+      try {
+        const entries = await getFeed("?alt=json&max-results=500");
+        const normalize = url => url.replace(/\/$/, "").toLowerCase();
+        const entry = entries.find(item =>
+          item.link?.some(link => link.rel === "alternate" && normalize(link.href) === normalize(chapterId))
+        );
+        if (entry?.content?.$t) {
+          const pages = extractImages(entry.content.$t);
+          if (pages.length) return pages;
+          throw new Error("matching Blogger feed entry contains no reader images");
+        }
+        throw new Error("chapter URL not found in Blogger post feed");
+      } catch (error) {
+        throw new Error("Comic Verse: " + pageError + "; feed fallback: " + String(error));
       }
-
-      return pages;
     }
   };
 
