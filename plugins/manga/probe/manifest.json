@@ -1,6 +1,0 @@
-{
-  "id": "probe7",
-  "name": "Probe7 retired",
-  "version": "0.0.5",
-  "entry": "probe7.plugin.js"
-}
