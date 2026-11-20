@@ -9,7 +9,7 @@ Comic Verse brings the Blogger-based Comic Verse catalog into Harbor while follo
 - **Popular:** reads the homepage and uses Mihon's `div.PopularPosts figure` selector.
 - **Search:** uses Blogger's JSON feed with the same included/excluded category-label query model as ZeistManga.
 - **Details:** resolves a series by its exact Blogger permalink path, then reads the series page.
-- **Chapters:** reads the series page's `[data-label]`, requests the `Chapter/<label>` Blogger feed, and paginates through all results using `openSearch$totalResults`.
+- **Chapters:** follows ZeistManga's feed resolution order: `#clwd > script`, legacy `#myUL > script`, `#latest > script`, then the ComicVerse `[data-label]` fallback. It paginates Blogger results using `openSearch$totalResults`.
 - **Pages:** requests the chapter URL as HTML and extracts only `#cvOriginal img[src]` through Harbor's HTML parser. No regex image scraping, page cache, or alternate feed fallback is used.
 
 The page-loading sequence mirrors Mihon's implementation:
