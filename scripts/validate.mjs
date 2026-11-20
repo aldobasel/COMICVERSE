@@ -1,0 +1,113 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+
+const source = await readFile("plugins/manga/comic-verse/index.ts", "utf8");
+const bundle = await readFile("dist/manga/comic-verse.plugin.js", "utf8");
+const manifest = JSON.parse(await readFile("plugins/manga/comic-verse/manifest.json", "utf8"));
+const repoIndex = JSON.parse(await readFile("dist/manga/repo.json", "utf8"));
+
+assert.equal(source, bundle, "published bundle must match the source file exactly");
+assert.equal(manifest.version, "1.1.0");
+assert.equal(repoIndex.plugins[0].version, manifest.version);
+assert.equal(repoIndex.plugins[0].entry, "comic-verse.plugin.js");
+
+let registered;
+const providerHost = {
+  register(provider) { registered = provider; }
+};
+new Function("harbor", bundle)(providerHost);
+
+assert.ok(registered, "provider must register");
+assert.equal(registered.id, "comic-verse");
+for (const method of ["popular", "search", "detail", "chapters", "pageUrls"]) {
+  assert.equal(typeof registered[method], "function", method + " must exist");
+}
+
+// Reader parity smoke test: request the chapter HTML, parse it, and select
+// #cvOriginal img[src] in document order.
+const chapterUrl = "https://arcomixverse.blogspot.com/2025/11/8_25.html";
+let httpRequest;
+let parsedHtml;
+const readerHost = {
+  register() {},
+  async http(url, options) {
+    httpRequest = { url, options };
+    return { ok: true, status: 200, body: "<html>reader fixture</html>" };
+  },
+  async parseHtml(html) {
+    parsedHtml = html;
+    return {
+      querySelector(selector) {
+        assert.equal(selector, "#cvOriginal");
+        return {
+          querySelectorAll(imageSelector) {
+            assert.equal(imageSelector, "img[src]");
+            return [
+              { attr(name) { return name === "src" ? "https://cdn.example/001.jpg" : null; } },
+              { attr(name) { return name === "src" ? "/images/002.jpg" : null; } }
+            ];
+          }
+        };
+      }
+    };
+  }
+};
+let readerProvider;
+new Function("harbor", bundle)({
+  ...readerHost,
+  register(provider) { readerProvider = provider; }
+});
+const pages = await readerProvider.pageUrls(chapterUrl);
+assert.deepEqual(pages, [
+  "https://cdn.example/001.jpg",
+  "https://arcomixverse.blogspot.com/images/002.jpg"
+]);
+assert.equal(httpRequest.url, chapterUrl);
+assert.equal(httpRequest.options.responseType, "text");
+assert.equal(parsedHtml, "<html>reader fixture</html>");
+
+// Chapter-feed smoke test: use the series page's data-label and fetch every
+// Blogger page until openSearch$totalResults has been reached.
+const seriesUrl = "https://arcomixverse.blogspot.com/2025/01/sample-series.html";
+const chapterEntries = (start, count) => Array.from({ length: count }, (_, index) => ({
+  title: { $t: "العدد " + (start + index) },
+  published: { $t: "2025-01-01T00:00:00.000Z" },
+  category: [{ term: "Chapter" }],
+  link: [{ rel: "alternate", href: "https://arcomixverse.blogspot.com/2025/01/ch-" + (start + index) + ".html" }]
+}));
+const feedCalls = [];
+let chapterProvider;
+const chapterHost = {
+  async http(url, options) {
+    if (options.responseType === "text") {
+      return { ok: true, status: 200, body: "<html>series fixture</html>" };
+    }
+    feedCalls.push(String(url));
+    const parsed = new URL(String(url));
+    const start = Number(parsed.searchParams.get("start-index"));
+    return {
+      feed: {
+        "openSearch$totalResults": { $t: "151" },
+        entry: start === 1 ? chapterEntries(1, 150) : chapterEntries(151, 1)
+      }
+    };
+  },
+  async parseHtml() {
+    return {
+      querySelector(selector) {
+        assert.equal(selector, "[data-label]");
+        return { attr(name) { return name === "data-label" ? "SAMPLE-SERIES" : null; } };
+      }
+    };
+  },
+  register(provider) { chapterProvider = provider; }
+};
+new Function("harbor", bundle)(chapterHost);
+const chapters = await chapterProvider.chapters(seriesUrl);
+assert.equal(chapters.length, 151);
+assert.equal(feedCalls.length, 2);
+assert.ok(feedCalls[0].includes("/-/Chapter/SAMPLE-SERIES"));
+assert.equal(new URL(feedCalls[0]).searchParams.get("start-index"), "1");
+assert.equal(new URL(feedCalls[1]).searchParams.get("start-index"), "151");
+
+console.log("Comic Verse validation passed: source/bundle, provider contract, Mihon-style page parsing, and complete chapter pagination.");
