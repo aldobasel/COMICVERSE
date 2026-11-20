@@ -18,6 +18,17 @@ var plugin = (() => {
     return response.feed.entry || [];
   }
 
+  function normalizePostUrl(raw) {
+    try {
+      const url = new URL(raw);
+      return url.hostname.replace(/^www\./i, "").toLowerCase() + url.pathname.replace(/\/+$/, "").toLowerCase();
+    } catch {
+      return raw.replace(/[?#].*$/, "").replace(/\/+$/, "").toLowerCase();
+    }
+  }
+
+  const chapterHtmlCache = new Map();
+
   function getPostUrl(entry) {
     return entry.link?.find(link => link.rel === "alternate")?.href || "";
   }
@@ -115,6 +126,18 @@ var plugin = (() => {
       const entries = await getFeed(
         `/-/${encodeURIComponent(id)}?alt=json&max-results=150`
       );
+
+      for (const entry of entries) {
+        const url = getPostUrl(entry);
+        const html = entry.content?.$t;
+        if (url && html) {
+          chapterHtmlCache.set(normalizePostUrl(url), html);
+          if (chapterHtmlCache.size > 2000) {
+            const oldest = chapterHtmlCache.keys().next().value;
+            if (oldest) chapterHtmlCache.delete(oldest);
+          }
+        }
+      }
 
       return entries
         .filter(entry => getLabels(entry).includes("Chapter"))
