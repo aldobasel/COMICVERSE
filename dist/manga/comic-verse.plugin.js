@@ -296,8 +296,25 @@ const plugin = {
     const altTitle = root.querySelector("header > p");
     const author = root.querySelector("span#author");
     const status = root.querySelector("span[data-status]");
+    let authorText = author ? author.text() : "";
+    let statusText = status ? status.text() : "";
+
+    // Match ZeistManga's metadata fallback for layouts that expose values in .y6x11p rows.
+    root.querySelectorAll(".y6x11p").forEach(function (row) {
+      const heading = row.querySelector("strong");
+      const valueNode = row.querySelector("span.dt");
+      const headingText = clean(heading ? heading.text() : row.text()).toLowerCase();
+      const value = clean(valueNode ? valueNode.text() : "");
+      if (!statusText && ["status", "estado", "الحالة"].some(function (word) { return headingText.includes(word); })) {
+        statusText = value;
+      }
+      if (!authorText && ["author", "autor", "mangaka", "الكاتب", "yazar"].some(function (word) { return headingText.includes(word); })) {
+        authorText = value;
+      }
+    });
+
     const titleNode = doc.querySelector("h1");
-    const title = clean(titleNode && titleNode.text()) || clean(entry.title && entry.title.$t);
+    const title = clean(entry.title && entry.title.$t) || clean(titleNode && titleNode.text());
 
     return {
       id: mangaUrl,
@@ -305,8 +322,8 @@ const plugin = {
       cover: image ? absoluteUrl(image.attr("src"), mangaUrl) : getThumbnail(entry),
       description: description ? description.text() : undefined,
       altTitle: altTitle ? altTitle.text() : undefined,
-      author: author ? author.text() : undefined,
-      status: status ? parseStatus(status.text()) : undefined,
+      author: authorText || undefined,
+      status: statusText ? parseStatus(statusText) : undefined,
       year: (title.match(/\b(19|20)\d{2}\b/) || [])[0]
         ? Number((title.match(/\b(19|20)\d{2}\b/) || [])[0])
         : undefined
