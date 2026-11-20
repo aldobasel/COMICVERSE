@@ -160,50 +160,77 @@ var plugin = (() => {
     async pageUrls(chapterId) {
       const extractImages = html => {
         const pages = [];
-        const marker = html.search(/id=["']cvOriginal["']/i);
-        const readerHtml = marker >= 0 ? html.slice(marker) : html;
-        const tags = readerHtml.match(/<(?:img|a)\b[^>]*>/gi) || [];
+        const seen = new Set();
+        const marker = html.search(/id=["'](?:cvOriginal|cvPages)["']/i);
+        const body = marker >= 0 ? html.slice(marker) : html;
+        const imageLike = value =>
+          /\.(?:avif|webp|png|jpe?g|gif|bmp|tiff?)(?:[?#]|$)/i.test(value) ||
+          /\/(?:s\d{2,4}|w\d+-h\d+|s\d+-c)(?:\/|$)/i.test(value);
+        const add = (raw, force = false) => {
+          let value = raw.replace(/&amp;/gi, '&').replace(/&#38;/g, '&')
+            .replace(/&quot;/gi, '"').replace(/&#39;/gi, "'").trim();
+          value = value.replace(/^["']|["']$/g, '');
+          if (!value || /^(?:data:|blob:|javascript:)/i.test(value)) return;
+          if (value.startsWith('//')) value = 'https:' + value;
+          try {
+            const absolute = new URL(value, chapterId).href;
+            if (!/^https?:\/\//i.test(absolute)) return;
+            if (!force && !imageLike(absolute)) return;
+            if (!seen.has(absolute)) { seen.add(absolute); pages.push(absolute); }
+          } catch {}
+        };
+        const tags = body.match(/<(?:img|source|a)\b[^>]*>/gi) || [];
         for (const tag of tags) {
-          const attrs = tag.matchAll(/(?:data-src|data-original|data-lazy-src|src|href)=["']([^"']+)["']/gi);
-          for (const attr of attrs) {
-            const url = attr[1].replace(/&amp;/g, "&").trim();
-            if (!/^https?:\/\//i.test(url)) continue;
-            if (!/(?:blogger\.googleusercontent\.com|bp\.blogspot\.com)/i.test(url)) continue;
-            if (!pages.includes(url)) pages.push(url);
+          const attrs = new Map();
+          for (const match of tag.matchAll(/([\w:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g)) {
+            attrs.set(match[1].toLowerCase(), match[2] ?? match[3] ?? match[4] ?? '');
           }
+          const tagName = /^<\s*([a-z]+)/i.exec(tag)?.[1]?.toLowerCase();
+          if (tagName === 'a') {
+            const href = attrs.get('href');
+            if (href) add(href);
+            continue;
+          }
+          for (const key of ['data-original', 'data-src', 'data-lazy-src', 'data-echo', 'data-url', 'src', 'data-srcset', 'srcset']) {
+            const value = attrs.get(key);
+            if (!value) continue;
+            if (key.includes('srcset')) {
+              for (const candidate of value.split(',')) add(candidate.trim().split(/\s+/)[0], true);
+            } else add(value, true);
+          }
+          const style = attrs.get('style') || '';
+          for (const match of style.matchAll(/background-image\s*:\s*url\((?:"|')?([^)"']+)(?:"|')?\)/gi)) add(match[1], true);
         }
         return pages;
       };
 
-      let pageError = "";
-      try {
-        const response = await harbor.http(chapterId, {
-          responseType: "text",
-          timeoutMs: 30000
-        });
-        if (response.ok) {
-          const pages = extractImages(response.body || "");
-          if (pages.length) return pages;
-          pageError = "chapter page had no reader images (HTTP " + response.status + ", body " + (response.body || "").length + " chars)";
-        } else {
-          pageError = "chapter page returned HTTP " + response.status;
-        }
-      } catch (error) {
-        pageError = String(error);
+      const cachedHtml = chapterHtmlCache.get(normalizePostUrl(chapterId));
+      if (cachedHtml) {
+        const cachedPages = extractImages(cachedHtml);
+        if (cachedPages.length) return cachedPages;
       }
 
+      let pageError = '';
       try {
-        const entries = await getFeed("?alt=json&max-results=500");
-        const normalize = url => url.replace(/\/$/, "").toLowerCase();
+        const response = await harbor.http(chapterId, { responseType: 'text', timeoutMs: 30000 });
+        if (response.ok) {
+          const pages = extractImages(response.body || '');
+          if (pages.length) return pages;
+          pageError = "chapter page had no image elements (HTTP " + response.status + ", body " + (response.body || '').length + " chars)";
+        } else pageError = "chapter page returned HTTP " + response.status;
+      } catch (error) { pageError = String(error); }
+
+      try {
+        const entries = await getFeed('?alt=json&max-results=500');
         const entry = entries.find(item =>
-          item.link?.some(link => link.rel === "alternate" && normalize(link.href) === normalize(chapterId))
+          item.link?.some(link => link.rel === 'alternate' && normalizePostUrl(link.href) === normalizePostUrl(chapterId))
         );
         if (entry?.content?.$t) {
           const pages = extractImages(entry.content.$t);
           if (pages.length) return pages;
-          throw new Error("matching Blogger feed entry contains no reader images");
+          throw new Error('matching Blogger feed entry contains no image elements');
         }
-        throw new Error("chapter URL not found in Blogger post feed");
+        throw new Error('chapter URL not found in Blogger post feed');
       } catch (error) {
         throw new Error("Comic Verse: " + pageError + "; feed fallback: " + String(error));
       }
