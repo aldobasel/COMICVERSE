@@ -37,6 +37,17 @@ async function getFeed(path = ''): Promise<BloggerEntry[]> {
   return data.feed.entry || [];
 }
 
+function normalizePostUrl(raw: string): string {
+  try {
+    const url = new URL(raw);
+    return `${url.hostname.replace(/^www\\./i, '').toLowerCase()}${url.pathname.replace(/\\/+$/, '').toLowerCase()}`;
+  } catch {
+    return raw.replace(/[?#].*$/, '').replace(/\\/+$/, '').toLowerCase();
+  }
+}
+
+const chapterHtmlCache = new Map<string, string>();
+
 function getPostUrl(entry: BloggerEntry): string {
   return entry.link?.find(link => link.rel === 'alternate')?.href || '';
 }
@@ -135,6 +146,18 @@ export const plugin: MangaProvider = {
       `/-/${encodeURIComponent(id)}?alt=json&max-results=150`
     );
 
+    for (const entry of entries) {
+      const url = getPostUrl(entry);
+      const html = entry.content?.$t;
+      if (url && html) {
+        chapterHtmlCache.set(normalizePostUrl(url), html);
+        if (chapterHtmlCache.size > 2000) {
+          const oldest = chapterHtmlCache.keys().next().value;
+          if (oldest) chapterHtmlCache.delete(oldest);
+        }
+      }
+    }
+
     return entries
       .filter(entry => getLabels(entry).includes('Chapter'))
       .map(entry => {
@@ -171,6 +194,13 @@ export const plugin: MangaProvider = {
       return pages;
     };
 
+    // Prefer the exact post HTML already fetched for the selected series.
+    const cachedHtml = chapterHtmlCache.get(normalizePostUrl(chapterId));
+    if (cachedHtml) {
+      const cachedPages = extractImages(cachedHtml);
+      if (cachedPages.length) return cachedPages;
+    }
+
     // Try the chapter page first.
     let pageError = '';
     try {
@@ -193,9 +223,8 @@ export const plugin: MangaProvider = {
     // fallback when the rendered blog page is blocked or transformed.
     try {
       const entries = await getFeed('?alt=json&max-results=500');
-      const normalize = (url: string) => url.replace(/\/$/, '').toLowerCase();
       const entry = entries.find(item =>
-        item.link?.some(link => link.rel === 'alternate' && normalize(link.href) === normalize(chapterId))
+        item.link?.some(link => link.rel === 'alternate' && normalizePostUrl(link.href) === normalizePostUrl(chapterId))
       );
       if (entry?.content?.$t) {
         const pages = extractImages(entry.content.$t);
