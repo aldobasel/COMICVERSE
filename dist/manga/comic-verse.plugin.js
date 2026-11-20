@@ -73,6 +73,25 @@ async function getDocument(url) {
   return (await getDocumentResponse(url)).document;
 }
 
+// Mihon's Jsoup parser keeps elements even when the page CSS hides them.
+// Harbor's parser removes CSS-hidden nodes before exposing its query tree. Extract
+// the target reader element from the raw response first, so its page stylesheet
+// cannot make #cvOriginal disappear during parsing.
+function extractElementById(html, id) {
+  const opening = new RegExp("<([a-z][\\w:-]*)\\b[^>]*\\bid\\s*=\\s*([\"'])" + id + "\\2[^>]*>", "i").exec(html);
+  if (!opening) return null;
+  const tagName = opening[1];
+  const tagPattern = new RegExp("</?" + tagName + "\\b[^>]*>", "gi");
+  tagPattern.lastIndex = opening.index + opening[0].length;
+  let depth = 1;
+  let tag;
+  while ((tag = tagPattern.exec(html))) {
+    if (/^<\//.test(tag[0])) depth--;
+    else if (!/\/\s*>$/.test(tag[0])) depth++;
+    if (depth === 0) return html.slice(opening.index, tagPattern.lastIndex);
+  }
+  return null;
+}
 function getThumbnail(entry) {
   const media = entry && entry["media$thumbnail"];
   if (media && media.url) {
@@ -368,7 +387,9 @@ const plugin = {
     const url = absoluteUrl(chapterId, BASE);
     if (!url) throw new Error("Comic Verse: invalid chapter URL");
 
-    // Mihon's getPageList: GET the chapter document, then select #cvOriginal img[src].
+    // Mihon: GET the chapter as a document, select #cvOriginal, then img[src].
+    // Harbor's parser removes CSS-hidden nodes, unlike Jsoup. Isolate the reader
+    // element from raw HTML before parsing so its stylesheet cannot hide it.
     const response = await harbor.http(url, {
       responseType: "text",
       timeoutMs: 30000
@@ -378,12 +399,12 @@ const plugin = {
         (response ? response.status : "unknown"));
     }
 
-    const document = await harbor.parseHtml(response.body || "");
-    const reader = document.querySelector("#cvOriginal");
-    if (!reader) {
-      throw new Error("Comic Verse: #cvOriginal was not found in the chapter document");
+    const readerHtml = extractElementById(response.body || "", "cvOriginal");
+    if (!readerHtml) {
+      throw new Error("Comic Verse: #cvOriginal was not found in the chapter HTML");
     }
 
+    const reader = await harbor.parseHtml(readerHtml);
     return reader.querySelectorAll("img[src]").map(function (image) {
       return absoluteUrl(image.attr("src"), url);
     }).filter(Boolean);
