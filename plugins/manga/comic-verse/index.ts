@@ -1,237 +1,317 @@
+const BASE = "https://arcomixverse.blogspot.com";
+const FEED = BASE + "/feeds/posts/default";
+const CHAPTER_CATEGORY = "Chapter";
+const PAGE_SIZE = 150;
 
-import type {
-  MangaChapter,
-  MangaProvider,
-  MangaSummary
-} from '../../../shared/types/manga.js';
+const INCLUDED_CATEGORIES = [
+  "Series", "Manga", "Manhwa", "Manhua", "Doujinshi",
+  "Web Novel (JP)", "Web Novel (KR)", "Web Novel (CN)"
+];
+const EXCLUDED_CATEGORIES = ["Anime", "Novel", "Novela", CHAPTER_CATEGORY];
 
-const BASE = 'https://arcomixverse.blogspot.com';
-const FEED = `${BASE}/feeds/posts/default`;
-
-interface BloggerEntry {
-  title?: { $t: string };
-  content?: { $t: string };
-  published?: { $t: string };
-  category?: { term: string }[];
-  link?: { rel: string; href: string }[];
+function clean(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
 }
 
-interface BloggerFeed {
-  feed?: {
-    entry?: BloggerEntry[];
-  };
-}
-
-async function getFeed(path = ''): Promise<BloggerEntry[]> {
-  const response = await harbor.http(
-    `${FEED}${path}`,
-    { responseType: 'json', timeoutMs: 30000 }
-  );
-
-  const data = response as BloggerFeed | null;
-
-  if (!data?.feed) {
-    throw new Error('Comic Verse: invalid Blogger feed');
-  }
-
-  return data.feed.entry || [];
-}
-
-function normalizePostUrl(raw: string): string {
+function absoluteUrl(raw, base) {
+  const value = clean(raw);
+  if (!value) return undefined;
   try {
-    const url = new URL(raw);
-    return `${url.hostname.replace(/^www\./i, '').toLowerCase()}${url.pathname.replace(/\/+$/, '').toLowerCase()}`;
-  } catch {
-    return raw.replace(/[?#].*$/, '').replace(/\/+$/, '').toLowerCase();
+    const url = new URL(value, base || BASE);
+    return /^https?:$/.test(url.protocol) ? url.href : undefined;
+  } catch (_) {
+    return undefined;
   }
 }
 
-const chapterHtmlCache = new Map<string, string>();
-
-function getPostUrl(entry: BloggerEntry): string {
-  return entry.link?.find(link => link.rel === 'alternate')?.href || '';
+function getAlternateUrl(entry) {
+  const links = Array.isArray(entry && entry.link) ? entry.link : [];
+  const link = links.find(function (item) { return item && item.rel === "alternate"; });
+  return link ? absoluteUrl(link.href, BASE) : undefined;
 }
 
-function getLabels(entry: BloggerEntry): string[] {
-  return (entry.category || []).map(category => category.term);
+function getLabels(entry) {
+  return (Array.isArray(entry && entry.category) ? entry.category : [])
+    .map(function (item) { return clean(item && item.term); })
+    .filter(Boolean);
 }
 
-function getCover(entry: BloggerEntry): string | undefined {
-  const html = entry.content?.$t || '';
-
-  const match = html.match(
-    /<img\b[^>]*?(?:src|data-src)=["']([^"']+)["']/i
-  );
-
-  return match?.[1]?.replace(/&amp;/g, '&');
+function hasLabel(entry, label) {
+  return getLabels(entry).includes(label);
 }
 
-function toSummary(entry: BloggerEntry): MangaSummary | null {
-  const title = entry.title?.$t?.trim();
+function feedUrl(path) {
+  return new URL(FEED + (path || ""));
+}
 
-  if (!title) return null;
+async function getFeed(url) {
+  const data = await harbor.http(String(url), {
+    responseType: "json",
+    timeoutMs: 30000
+  });
+  if (!data || !data.feed) {
+    throw new Error("Comic Verse: Blogger returned an invalid feed");
+  }
+  return data.feed;
+}
 
+async function getDocument(url) {
+  const response = await harbor.http(String(url), {
+    responseType: "text",
+    timeoutMs: 30000
+  });
+  if (!response || !response.ok) {
+    throw new Error("Comic Verse: HTTP " + (response ? response.status : "unknown") + " while loading " + url);
+  }
+  return harbor.parseHtml(response.body || "");
+}
+
+function getThumbnail(entry) {
+  const media = entry && entry["media$thumbnail"];
+  if (media && media.url) {
+    return String(media.url)
+      .replace(/\/s.+?-c\//, "/w600/")
+      .replace(/=s(?!.*=s).+?-c$/, "=w600");
+  }
+  return undefined;
+}
+
+async function entryToSummary(entry) {
+  const title = clean(entry && entry.title && entry.title.$t);
+  const id = getAlternateUrl(entry);
+  if (!title || !id) return null;
+
+  let cover = getThumbnail(entry);
+  if (!cover && entry.content && entry.content.$t) {
+    const contentDoc = await harbor.parseHtml(entry.content.$t);
+    const image = contentDoc.querySelector("img[src]");
+    cover = image ? absoluteUrl(image.attr("src"), id) : undefined;
+  }
+
+  const labels = getLabels(entry);
   const yearMatch = title.match(/\b(19|20)\d{2}\b/);
+  let status;
+  if (labels.includes("مستمر") || labels.includes("مستمرة")) status = "Ongoing";
+  else if (labels.includes("مكتمل") || labels.includes("مكتملة")) status = "Completed";
 
   return {
-    id: title,
-    title,
-    cover: getCover(entry),
+    id: id,
+    title: title,
+    cover: absoluteUrl(cover, id),
     year: yearMatch ? Number(yearMatch[0]) : undefined,
-    status: getLabels(entry).includes('مستمر')
-      ? 'Ongoing'
-      : getLabels(entry).includes('مكتمل')
-        ? 'Completed'
-        : undefined,
-    description: undefined
+    status: status
   };
 }
 
-function getChapterNumber(title: string): string | null {
-  const match = title.match(
-    /(?:العدد|#)\s*#?\s*(\d+(?:\.\d+)?)/i
-  );
-
-  return match?.[1] || null;
+function searchQuery(query) {
+  const parts = [];
+  INCLUDED_CATEGORIES.forEach(function (label) {
+    parts.push('label:"' + label + '"');
+  });
+  EXCLUDED_CATEGORIES.forEach(function (label) {
+    parts.push('-label:"' + label + '"');
+  });
+  const term = clean(query);
+  if (term) parts.push(term);
+  return "{" + parts.slice(0, INCLUDED_CATEGORIES.length).join(" ") + "} " +
+    parts.slice(INCLUDED_CATEGORIES.length).join(" ");
 }
 
-export const plugin: MangaProvider = {
-  id: 'comic-verse',
-  name: 'Comic Verse',
+function chapterNumber(title) {
+  const match = clean(title).match(/(?:العدد|#)\s*#?\s*(\d+(?:\.\d+)?)/i);
+  return match ? match[1] : null;
+}
 
-  async popular(offset: number): Promise<MangaSummary[]> {
-    const entries = await getFeed(
-      `/-/Series?alt=json&max-results=48&start-index=${offset + 1}`
-    );
+function chapterFeedUrl(label) {
+  const url = feedUrl("/-/" + CHAPTER_CATEGORY + "/" + encodeURIComponent(label));
+  url.searchParams.set("alt", "json");
+  return url;
+}
 
-    return entries
-      .filter(entry => getLabels(entry).includes('Series'))
-      .map(toSummary)
-      .filter((item): item is MangaSummary => item !== null);
+async function getAllChapterEntries(url) {
+  const entries = [];
+  let startIndex = 1;
+  let totalResults = 0;
+
+  while (true) {
+    const pageUrl = new URL(String(url));
+    pageUrl.searchParams.set("alt", "json");
+    pageUrl.searchParams.set("start-index", String(startIndex));
+    pageUrl.searchParams.set("max-results", String(PAGE_SIZE));
+
+    const feed = await getFeed(pageUrl);
+    const pageEntries = Array.isArray(feed.entry) ? feed.entry : [];
+    entries.push.apply(entries, pageEntries);
+
+    const total = feed["openSearch$totalResults"];
+    totalResults = Number(total && total.$t) || 0;
+
+    if (!pageEntries.length || !totalResults || entries.length >= totalResults) {
+      break;
+    }
+    startIndex = entries.length + 1;
+  }
+
+  return entries;
+}
+
+function postPath(rawUrl) {
+  const url = new URL(rawUrl);
+  return url.pathname;
+}
+
+function isSeriesEntry(entry) {
+  const labels = getLabels(entry);
+  return labels.some(function (label) {
+    return INCLUDED_CATEGORIES.includes(label);
+  }) && !EXCLUDED_CATEGORIES.some(function (label) {
+    return labels.includes(label);
+  });
+}
+
+function parseStatus(value) {
+  const status = clean(value).toLowerCase();
+  if (["ongoing", "مستمر", "مستمرة", "en curso", "activo", "ativo"].includes(status)) return "Ongoing";
+  if (["completed", "مكتمل", "مكتملة", "finalizado", "completo"].includes(status)) return "Completed";
+  if (["hiatus", "paused", "متوقف", "متوقفة"].includes(status)) return "Hiatus";
+  if (["cancelled", "canceled", "dropped", "ملغي", "ملغاة"].includes(status)) return "Cancelled";
+  return undefined;
+}
+
+const plugin = {
+  id: "comic-verse",
+  name: "Comic Verse",
+
+  async popular(offset) {
+    const doc = await getDocument(BASE + "/");
+    return doc.querySelectorAll("div.PopularPosts figure").map(function (figure) {
+      const link = figure.querySelector("figcaption > a");
+      const image = figure.querySelector("img");
+      if (!link) return null;
+      const id = absoluteUrl(link.attr("href"), BASE);
+      const title = clean(link.text());
+      if (!id || !title) return null;
+      return {
+        id: id,
+        title: title,
+        cover: image ? absoluteUrl(image.attr("src"), id) : undefined
+      };
+    }).filter(Boolean);
   },
 
-  async search(query: string, offset: number): Promise<MangaSummary[]> {
-    const entries = await getFeed(
-      `/-/Series?q=${encodeURIComponent(query)}&alt=json&max-results=48&start-index=${offset + 1}`
-    );
+  async search(query, offset) {
+    const url = feedUrl("");
+    url.searchParams.set("alt", "json");
+    url.searchParams.set("q", searchQuery(query));
+    url.searchParams.set("max-results", "48");
+    url.searchParams.set("start-index", String((Number(offset) || 0) + 1));
 
-    const normalized = query.toLowerCase();
-
-    return entries
-      .filter(entry => getLabels(entry).includes('Series'))
-      .filter(entry =>
-        (entry.title?.$t || '').toLowerCase().includes(normalized)
-      )
-      .map(toSummary)
-      .filter((item): item is MangaSummary => item !== null);
+    const feed = await getFeed(url);
+    const entries = (Array.isArray(feed.entry) ? feed.entry : []).filter(isSeriesEntry);
+    const summaries = await Promise.all(entries.map(entryToSummary));
+    return summaries.filter(Boolean);
   },
 
-  async detail(id: string): Promise<MangaSummary | null> {
-    const entries = await getFeed(
-      `/-/Series?alt=json&max-results=500`
-    );
+  async detail(id) {
+    const mangaUrl = absoluteUrl(id, BASE);
+    if (!mangaUrl) return null;
 
-    const entry = entries.find(
-      item => item.title?.$t?.trim() === id
-    );
+    // Mihon's getMangaByUrl resolves Blogger posts by their exact permalink path.
+    const lookup = feedUrl("");
+    lookup.searchParams.set("alt", "json");
+    lookup.searchParams.set("path", postPath(mangaUrl));
+    const feed = await getFeed(lookup);
+    const entries = Array.isArray(feed.entry) ? feed.entry : [];
+    const entry = entries.find(function (item) {
+      return getAlternateUrl(item) === mangaUrl;
+    }) || entries[0];
 
-    return entry ? toSummary(entry) : {
-      id,
-      title: id
+    if (!entry || !isSeriesEntry(entry)) return null;
+
+    const doc = await getDocument(mangaUrl);
+    const root = doc.querySelector(".grid.gtc-235fr");
+    if (!root) {
+      throw new Error("Comic Verse: the series details container .grid.gtc-235fr was not found");
+    }
+
+    const image = root.querySelector("img");
+    const description = root.querySelector("#synopsis");
+    const altTitle = root.querySelector("header > p");
+    const author = root.querySelector("span#author");
+    const status = root.querySelector("span[data-status]");
+    const titleNode = doc.querySelector("h1");
+    const title = clean(titleNode && titleNode.text()) || clean(entry.title && entry.title.$t);
+
+    return {
+      id: mangaUrl,
+      title: title,
+      cover: image ? absoluteUrl(image.attr("src"), mangaUrl) : getThumbnail(entry),
+      description: description ? description.text() : undefined,
+      altTitle: altTitle ? altTitle.text() : undefined,
+      author: author ? author.text() : undefined,
+      status: status ? parseStatus(status.text()) : undefined,
+      year: (title.match(/\b(19|20)\d{2}\b/) || [])[0]
+        ? Number((title.match(/\b(19|20)\d{2}\b/) || [])[0])
+        : undefined
     };
   },
 
-  async chapters(id: string): Promise<MangaChapter[]> {
-    const entries = await getFeed(
-      `/-/${encodeURIComponent(id)}?alt=json&max-results=150`
-    );
+  async chapters(id) {
+    const mangaUrl = absoluteUrl(id, BASE);
+    if (!mangaUrl) throw new Error("Comic Verse: invalid series URL");
 
-    for (const entry of entries) {
-      const url = getPostUrl(entry);
-      const html = entry.content?.$t;
-      if (url && html) {
-        chapterHtmlCache.set(normalizePostUrl(url), html);
-        if (chapterHtmlCache.size > 2000) {
-          const oldest = chapterHtmlCache.keys().next().value;
-          if (oldest) chapterHtmlCache.delete(oldest);
-        }
-      }
+    // Exact Mihon behavior: read the series page and take its [data-label] value.
+    const doc = await getDocument(mangaUrl);
+    const labelNode = doc.querySelector("[data-label]");
+    const label = clean(labelNode && labelNode.attr("data-label"));
+    if (!label) {
+      throw new Error("Comic Verse: the series page has no [data-label] chapter-feed label");
     }
 
+    const entries = await getAllChapterEntries(chapterFeedUrl(label));
     return entries
-      .filter(entry => getLabels(entry).includes('Chapter'))
-      .map(entry => {
-        const title = entry.title?.$t || '';
-        const url = getPostUrl(entry);
-
+      .filter(function (entry) { return hasLabel(entry, CHAPTER_CATEGORY); })
+      .map(function (entry) {
+        const title = clean(entry && entry.title && entry.title.$t);
+        const url = getAlternateUrl(entry);
+        if (!title || !url) return null;
         return {
           id: url,
-          chapter: getChapterNumber(title),
-          title,
+          chapter: chapterNumber(title),
+          title: title,
           pages: 0,
-          language: 'ar',
-          publishAt: entry.published?.$t
+          language: "ar",
+          publishAt: entry.published && entry.published.$t
+            ? clean(entry.published.$t)
+            : undefined
         };
       })
-      .filter(chapter => Boolean(chapter.id));
+      .filter(Boolean);
   },
 
-  async pageUrls(chapterId: string): Promise<string[]> {
-    // Match Mihon's Comic Verse extension exactly: #cvOriginal img[src].
-    const extractImages = (html: string): string[] => {
-      const marker = html.search(/id\s*=\s*["']cvOriginal["']/i);
-      if (marker < 0) return [];
-      const readerHtml = html.slice(marker);
-      const pages: string[] = [];
-      const seen = new Set<string>();
-      for (const tag of readerHtml.match(/<img\b[^>]*>/gi) || []) {
-        const srcMatch = tag.match(/\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i);
-        const raw = srcMatch?.[1] ?? srcMatch?.[2] ?? srcMatch?.[3] ?? '';
-        if (!raw) continue;
-        let value = raw.replace(/&amp;/gi, '&').replace(/&#38;/g, '&')
-          .replace(/&quot;/gi, '"').replace(/&#39;/gi, "'").trim();
-        if (!value || /^(?:data:|blob:|javascript:)/i.test(value)) continue;
-        if (value.startsWith('//')) value = 'https:' + value;
-        try {
-          const absolute = new URL(value, chapterId).href;
-          if (!/^https?:\/\//i.test(absolute) || seen.has(absolute)) continue;
-          seen.add(absolute);
-          pages.push(absolute);
-        } catch {}
-      }
-      return pages;
-    };
-    const cachedHtml = chapterHtmlCache.get(normalizePostUrl(chapterId));
-    if (cachedHtml) {
-      const cachedPages = extractImages(cachedHtml);
-      if (cachedPages.length) return cachedPages;
+  async pageUrls(chapterId) {
+    const url = absoluteUrl(chapterId, BASE);
+    if (!url) throw new Error("Comic Verse: invalid chapter URL");
+
+    // Mihon's getPageList: GET the chapter document, then select #cvOriginal img[src].
+    const response = await harbor.http(url, {
+      responseType: "text",
+      timeoutMs: 30000
+    });
+    if (!response || !response.ok) {
+      throw new Error("Comic Verse: chapter page returned HTTP " +
+        (response ? response.status : "unknown"));
     }
-    let pageError = '';
-    try {
-      const response = await harbor.http(chapterId, { responseType: 'text', timeoutMs: 30000 });
-      if (response.ok) {
-        const pages = extractImages(response.body || '');
-        if (pages.length) return pages;
-        pageError = `chapter page has no #cvOriginal img[src] (HTTP ${response.status})`;
-      } else pageError = `chapter page returned HTTP ${response.status}`;
-    } catch (error) {
-      pageError = String(error);
+
+    const document = await harbor.parseHtml(response.body || "");
+    const reader = document.querySelector("#cvOriginal");
+    if (!reader) {
+      throw new Error("Comic Verse: #cvOriginal was not found in the chapter document");
     }
-    // Mihon resolves Blogger posts by exact permalink path, not a limited recent-post scan.
-    try {
-      const postPath = new URL(chapterId).pathname;
-      const entries = await getFeed(`?path=${encodeURIComponent(postPath)}&alt=json`);
-      const entry = entries.find(item =>
-        item.link?.some(link => link.rel === 'alternate' &&
-          normalizePostUrl(link.href) === normalizePostUrl(chapterId))
-      ) || entries[0];
-      if (!entry?.content?.$t) throw new Error('Blogger path feed returned no matching post content');
-      const pages = extractImages(entry.content.$t);
-      if (pages.length) return pages;
-      throw new Error('Blogger post content has no #cvOriginal img[src] elements');
-    } catch (error) {
-      throw new Error(`Comic Verse: ${pageError}; exact-path feed fallback: ${String(error)}`);
-    }
+
+    return reader.querySelectorAll("img[src]").map(function (image) {
+      return absoluteUrl(image.attr("src"), url);
+    }).filter(Boolean);
   }
 };
 
