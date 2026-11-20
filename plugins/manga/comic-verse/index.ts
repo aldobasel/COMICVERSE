@@ -92,6 +92,30 @@ function extractElementById(html, id) {
   }
   return null;
 }
+function decodeHtmlAttribute(value) {
+  return String(value || "").replace(/&(#x[0-9a-f]+|#[0-9]+|amp|quot|apos|lt|gt);/gi, function (entity, code) {
+    const named = { amp: "&", quot: '"', apos: "'", lt: "<", gt: ">" };
+    if (code.charAt(0) !== "#") return named[code.toLowerCase()] || entity;
+    const hex = code.charAt(1).toLowerCase() === "x";
+    const number = parseInt(code.slice(hex ? 2 : 1), hex ? 16 : 10);
+    return Number.isFinite(number) && number >= 0 && number <= 0x10ffff ? String.fromCodePoint(number) : entity;
+  });
+}
+
+function extractImageSources(html) {
+  const urls = [];
+  const imageTags = /<img\b([^>]*)>/gi;
+  let image;
+  while ((image = imageTags.exec(html))) {
+    const attrs = image[1] || "";
+    const src = /(?:^|\s)src\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>\x60]+))/i.exec(attrs);
+    if (!src) continue;
+    const value = decodeHtmlAttribute(src[1] !== undefined ? src[1] : src[2] !== undefined ? src[2] : src[3]);
+    if (value.trim()) urls.push(value.trim());
+  }
+  return urls;
+}
+
 function getThumbnail(entry) {
   const media = entry && entry["media$thumbnail"];
   if (media && media.url) {
@@ -404,9 +428,11 @@ const plugin = {
       throw new Error("Comic Verse: #cvOriginal was not found in the chapter HTML");
     }
 
-    const reader = await harbor.parseHtml(readerHtml);
-    return reader.querySelectorAll("img[src]").map(function (image) {
-      return absoluteUrl(image.attr("src"), url);
+    // Match Jsoup's #cvOriginal img[src] selection directly from the isolated
+    // source markup. Avoid Harbor's HTML sanitizer, which may discard an
+    // inline-hidden reader node. Preserve document order exactly like Jsoup.
+    return extractImageSources(readerHtml).map(function (src) {
+      return absoluteUrl(src, url);
     }).filter(Boolean);
   }
 };
