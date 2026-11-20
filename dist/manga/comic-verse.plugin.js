@@ -55,7 +55,7 @@ async function getFeed(url) {
   return data.feed;
 }
 
-async function getDocument(url) {
+async function getDocumentResponse(url) {
   const response = await harbor.http(String(url), {
     responseType: "text",
     timeoutMs: 30000
@@ -63,7 +63,14 @@ async function getDocument(url) {
   if (!response || !response.ok) {
     throw new Error("Comic Verse: HTTP " + (response ? response.status : "unknown") + " while loading " + url);
   }
-  return harbor.parseHtml(response.body || "");
+  return {
+    body: response.body || "",
+    document: await harbor.parseHtml(response.body || "")
+  };
+}
+
+async function getDocument(url) {
+  return (await getDocumentResponse(url)).document;
 }
 
 function getThumbnail(entry) {
@@ -126,6 +133,56 @@ function chapterFeedUrl(label) {
   const url = feedUrl("/-/" + CHAPTER_CATEGORY + "/" + encodeURIComponent(label));
   url.searchParams.set("alt", "json");
   return url;
+}
+
+// ZeistManga checks #clwd > script, then the legacy #myUL script, then #latest.
+// Harbor strips scripts from parsed documents, so inspect raw HTML only for feed
+// declarations. Chapter images are always extracted through harbor.parseHtml.
+function directScriptById(html, id) {
+  const open = new RegExp("<([a-z][\\w:-]*)\\b[^>]*\\bid\\s*=\\s*([\\\"'])" + id + "\\2[^>]*>", "i").exec(html);
+  if (!open) return null;
+  const rest = html.slice(open.index + open[0].length);
+  const script = /^\\s*<script\\b([^>]*)>([\\s\\S]*?)<\\/script\\s*>/i.exec(rest);
+  if (!script) return null;
+  return { attributes: script[1] || "", content: script[2] || "" };
+}
+
+function attributeValue(attributes, name) {
+  const match = new RegExp("\\b" + name + "\\s*=\\s*(?:[\\\"']([^\\\"']*)[\\\"']|([^\\s>]+))", "i").exec(attributes);
+  return match ? (match[1] || match[2] || "") : "";
+}
+
+function resolveChapterFeed(rawHtml, dataLabel) {
+  const primary = directScriptById(rawHtml, "clwd");
+  if (primary) {
+    const match = /clwd\\.run\\([\\\"'](.*?)[\\\"']\\)/.exec(primary.content);
+    return chapterFeedUrl(match ? match[1] : dataLabel);
+  }
+
+  const legacy = directScriptById(rawHtml, "myUL");
+  if (legacy) {
+    const src = attributeValue(legacy.attributes, "src");
+    const match = /([^']+)\\?/.exec(src);
+    if (match) {
+      const url = new URL(match[1], BASE);
+      url.searchParams.set("alt", "json");
+      return url;
+    }
+  }
+
+  const latest = directScriptById(rawHtml, "latest");
+  if (latest) {
+    const match = /label\\s*=\\s*'([^']+)'/.exec(latest.content);
+    if (match) {
+      const url = feedUrl("/-/" + encodeURIComponent(match[1]));
+      url.searchParams.set("alt", "json");
+      url.searchParams.set("start-index", "1");
+      url.searchParams.set("max-results", "999999");
+      return url;
+    }
+  }
+
+  return chapterFeedUrl(dataLabel);
 }
 
 async function getAllChapterEntries(url) {
@@ -261,14 +318,15 @@ const plugin = {
     if (!mangaUrl) throw new Error("Comic Verse: invalid series URL");
 
     // Exact Mihon behavior: read the series page and take its [data-label] value.
-    const doc = await getDocument(mangaUrl);
-    const labelNode = doc.querySelector("[data-label]");
+    const seriesPage = await getDocumentResponse(mangaUrl);
+    const labelNode = seriesPage.document.querySelector("[data-label]");
     const label = clean(labelNode && labelNode.attr("data-label"));
     if (!label) {
       throw new Error("Comic Verse: the series page has no [data-label] chapter-feed label");
     }
 
-    const entries = await getAllChapterEntries(chapterFeedUrl(label));
+    const chapterFeed = resolveChapterFeed(seriesPage.body, label);
+    const entries = await getAllChapterEntries(chapterFeed);
     return entries
       .filter(function (entry) { return hasLabel(entry, CHAPTER_CATEGORY); })
       .map(function (entry) {
