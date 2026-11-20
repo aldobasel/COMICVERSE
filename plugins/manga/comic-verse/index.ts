@@ -158,13 +158,13 @@ export const plugin: MangaProvider = {
       const pages: string[] = [];
       const readerMarker = html.search(/id=["']cvOriginal["']/i);
       const readerHtml = readerMarker >= 0 ? html.slice(readerMarker) : html;
-      const tags = readerHtml.match(/<(?:img|a)\\b[^>]*>/gi) || [];
+      const tags = readerHtml.match(/<(?:img|a)\b[^>]*>/gi) || [];
       for (const tag of tags) {
         const attrs = tag.matchAll(/(?:data-src|data-original|data-lazy-src|src|href)=["']([^"']+)["']/gi);
         for (const attr of attrs) {
           const url = attr[1].replace(/&amp;/g, '&').trim();
-          if (!/^https?:\\/\\//i.test(url)) continue;
-          if (!/(?:blogger\\.googleusercontent\\.com|bp\\.blogspot\\.com)/i.test(url)) continue;
+          if (!/^https?:\/\//i.test(url)) continue;
+          if (!/(?:blogger\.googleusercontent\.com|bp\.blogspot\.com)/i.test(url)) continue;
           if (!pages.includes(url)) pages.push(url);
         }
       }
@@ -193,7 +193,7 @@ export const plugin: MangaProvider = {
     // fallback when the rendered blog page is blocked or transformed.
     try {
       const entries = await getFeed('?alt=json&max-results=500');
-      const normalize = (url: string) => url.replace(/\\/$/, '').toLowerCase();
+      const normalize = (url: string) => url.replace(/\/$/, '').toLowerCase();
       const entry = entries.find(item =>
         item.link?.some(link => link.rel === 'alternate' && normalize(link.href) === normalize(chapterId))
       );
