@@ -177,81 +177,60 @@ export const plugin: MangaProvider = {
   },
 
   async pageUrls(chapterId: string): Promise<string[]> {
+    // Match Mihon's Comic Verse extension exactly: #cvOriginal img[src].
     const extractImages = (html: string): string[] => {
+      const marker = html.search(/id\s*=\s*["']cvOriginal["']/i);
+      if (marker < 0) return [];
+      const readerHtml = html.slice(marker);
       const pages: string[] = [];
       const seen = new Set<string>();
-      const marker = html.search(/id=["'](?:cvOriginal|cvPages)["']/i);
-      const body = marker >= 0 ? html.slice(marker) : html;
-      const imageLike = (value: string) =>
-        /\.(?:avif|webp|png|jpe?g|gif|bmp|tiff?)(?:[?#]|$)/i.test(value) ||
-        /\/(?:s\d{2,4}|w\d+-h\d+|s\d+-c)(?:\/|$)/i.test(value);
-      const add = (raw: string, force = false) => {
+      for (const tag of readerHtml.match(/<img\b[^>]*>/gi) || []) {
+        const srcMatch = tag.match(/\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i);
+        const raw = srcMatch?.[1] ?? srcMatch?.[2] ?? srcMatch?.[3] ?? '';
+        if (!raw) continue;
         let value = raw.replace(/&amp;/gi, '&').replace(/&#38;/g, '&')
-          .replace(/&quot;/gi, '"').replace(/&#39;/g, "'").trim();
-        value = value.replace(/^["']|["']$/g, '');
-        if (!value || /^(?:data:|blob:|javascript:)/i.test(value)) return;
+          .replace(/&quot;/gi, '"').replace(/&#39;/gi, "'").trim();
+        if (!value || /^(?:data:|blob:|javascript:)/i.test(value)) continue;
         if (value.startsWith('//')) value = 'https:' + value;
         try {
           const absolute = new URL(value, chapterId).href;
-          if (!/^https?:\/\//i.test(absolute)) return;
-          if (!force && !imageLike(absolute)) return;
-          if (!seen.has(absolute)) { seen.add(absolute); pages.push(absolute); }
+          if (!/^https?:\/\//i.test(absolute) || seen.has(absolute)) continue;
+          seen.add(absolute);
+          pages.push(absolute);
         } catch {}
-      };
-      const tags = body.match(/<(?:img|source|a)\b[^>]*>/gi) || [];
-      for (const tag of tags) {
-        const attrs = new Map<string, string>();
-        for (const match of tag.matchAll(/([\w:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g)) {
-          attrs.set(match[1].toLowerCase(), match[2] ?? match[3] ?? match[4] ?? '');
-        }
-        const tagName = /^<\s*([a-z]+)/i.exec(tag)?.[1]?.toLowerCase();
-        if (tagName === 'a') {
-          const href = attrs.get('href');
-          if (href) add(href);
-          continue;
-        }
-        for (const key of ['data-original', 'data-src', 'data-lazy-src', 'data-echo', 'data-url', 'src', 'data-srcset', 'srcset']) {
-          const value = attrs.get(key);
-          if (!value) continue;
-          if (key.includes('srcset')) {
-            for (const candidate of value.split(',')) add(candidate.trim().split(/\s+/)[0], true);
-          } else add(value, true);
-        }
-        const style = attrs.get('style') || '';
-        for (const match of style.matchAll(/background-image\s*:\s*url\((?:"|')?([^)"']+)(?:"|')?\)/gi)) add(match[1], true);
       }
       return pages;
     };
-
     const cachedHtml = chapterHtmlCache.get(normalizePostUrl(chapterId));
     if (cachedHtml) {
       const cachedPages = extractImages(cachedHtml);
       if (cachedPages.length) return cachedPages;
     }
-
     let pageError = '';
     try {
       const response = await harbor.http(chapterId, { responseType: 'text', timeoutMs: 30000 });
       if (response.ok) {
         const pages = extractImages(response.body || '');
         if (pages.length) return pages;
-        pageError = `chapter page had no image elements (HTTP ${response.status}, body ${(response.body || '').length} chars)`;
+        pageError = `chapter page has no #cvOriginal img[src] (HTTP ${response.status})`;
       } else pageError = `chapter page returned HTTP ${response.status}`;
-    } catch (error) { pageError = String(error); }
-
-    try {
-      const entries = await getFeed('?alt=json&max-results=500');
-      const entry = entries.find(item =>
-        item.link?.some(link => link.rel === 'alternate' && normalizePostUrl(link.href) === normalizePostUrl(chapterId))
-      );
-      if (entry?.content?.$t) {
-        const pages = extractImages(entry.content.$t);
-        if (pages.length) return pages;
-        throw new Error('matching Blogger feed entry contains no image elements');
-      }
-      throw new Error('chapter URL not found in Blogger post feed');
     } catch (error) {
-      throw new Error(`Comic Verse: ${pageError}; feed fallback: ${String(error)}`);
+      pageError = String(error);
+    }
+    // Mihon resolves Blogger posts by exact permalink path, not a limited recent-post scan.
+    try {
+      const postPath = new URL(chapterId).pathname;
+      const entries = await getFeed(`?path=${encodeURIComponent(postPath)}&alt=json`);
+      const entry = entries.find(item =>
+        item.link?.some(link => link.rel === 'alternate' &&
+          normalizePostUrl(link.href) === normalizePostUrl(chapterId))
+      ) || entries[0];
+      if (!entry?.content?.$t) throw new Error('Blogger path feed returned no matching post content');
+      const pages = extractImages(entry.content.$t);
+      if (pages.length) return pages;
+      throw new Error('Blogger post content has no #cvOriginal img[src] elements');
+    } catch (error) {
+      throw new Error(`Comic Verse: ${pageError}; exact-path feed fallback: ${String(error)}`);
     }
   }
 };
