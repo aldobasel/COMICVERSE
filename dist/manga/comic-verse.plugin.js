@@ -1,3 +1,195 @@
-"use strict";var plugin=(()=>{var l=Object.defineProperty;var d=Object.getOwnPropertyDescriptor;var p=Object.getOwnPropertyNames;var f=Object.prototype.hasOwnProperty;var h=(e,t)=>{for(var r in t)l(e,r,{get:t[r],enumerable:!0})},y=(e,t,r,s)=>{if(t&&typeof t=="object"||typeof t=="function")for(let n of p(t))!f.call(e,n)&&n!==r&&l(e,n,{get:()=>t[n],enumerable:!(s=d(t,n))||s.enumerable});return e};var b=e=>y(l({},"__esModule",{value:!0}),e);var E={};h(E,{plugin:()=>m});var $="https://arcomixverse.blogspot.com",w=`${$}/feeds/posts/default`;async function a(e=""){let r=await harbor.http(`${w}${e}`,{responseType:"json",timeoutMs:3e4});if(!r?.feed)throw new Error("Comic Verse: invalid Blogger feed");return r.feed.entry||[]}function C(e){return e.link?.find(t=>t.rel==="alternate")?.href||""}function i(e){return(e.category||[]).map(t=>t.term)}function M(e){return(e.content?.$t||"").match(/<img\b[^>]*?(?:src|data-src)=["']([^"']+)["']/i)?.[1]?.replace(/&amp;/g,"&")}function c(e){let t=e.title?.$t?.trim();if(!t)return null;let r=t.match(/\b(19|20)\d{2}\b/);return{id:t,title:t,cover:M(e),year:r?Number(r[0]):void 0,status:i(e).includes("\u0645\u0633\u062A\u0645\u0631")?"Ongoing":i(e).includes("\u0645\u0643\u062A\u0645\u0644")?"Completed":void 0,description:void 0}}function S(e){return e.match(/(?:العدد|#)\s*#?\s*(\d+(?:\.\d+)?)/i)?.[1]||null}var m={id:"comic-verse",name:"Comic Verse",async popular(e){return(await a(`/-/Series?alt=json&max-results=48&start-index=${e+1}`)).filter(r=>i(r).includes("Series")).map(c).filter(r=>r!==null)},async search(e,t){let r=await a(`/-/Series?q=${encodeURIComponent(e)}&alt=json&max-results=48&start-index=${t+1}`),s=e.toLowerCase();return r.filter(n=>i(n).includes("Series")).filter(n=>(n.title?.$t||"").toLowerCase().includes(s)).map(c).filter(n=>n!==null)},async detail(e){let r=(await a("/-/Series?alt=json&max-results=500")).find(s=>s.title?.$t?.trim()===e);return r?c(r):{id:e,title:e}},async chapters(e){return(await a(`/-/${encodeURIComponent(e)}?alt=json&max-results=150`)).filter(r=>i(r).includes("Chapter")).map(r=>{let s=r.title?.$t||"";return{id:C(r),chapter:S(s),title:s,pages:0,language:"ar",publishAt:r.published?.$t}}).filter(r=>!!r.id)},async pageUrls(e){let t=await harbor.http(e,{responseType:"text",timeoutMs:3e4});if(!t.ok)throw new Error(`Comic Verse: HTTP ${t.status}`);let s=t.body.match(/<img\b[^>]*>/gi)||[],n=[];for(let u of s){let g=u.match(/(?:src|data-src|data-original)=["']([^"']+)["']/i);if(!g)continue;let o=g[1].replace(/&amp;/g,"&");/\/P\d+\.(?:jpg|jpeg|png|webp)(?:\?|$)/i.test(o)&&(n.includes(o)||n.push(o))}if(n.length===0)throw new Error("Comic Verse: no comic pages found in this chapter");return n}};harbor.register(m);return b(E);})();
 
-if (typeof plugin !== "undefined" && typeof harbor !== "undefined" && harbor.register) { var __p = (plugin && (plugin.default || plugin.plugin)) ? (plugin.default || plugin.plugin) : plugin; if (__p && __p.id && __p.name) { try { harbor.register(__p); } catch (_) {} } }
+"use strict";
+
+var plugin = (() => {
+  const BASE = "https://arcomixverse.blogspot.com";
+  const FEED = `${BASE}/feeds/posts/default`;
+
+  async function getFeed(path = "") {
+    const response = await harbor.http(
+      `${FEED}${path}`,
+      { responseType: "json", timeoutMs: 30000 }
+    );
+
+    if (!response?.feed) {
+      throw new Error("Comic Verse: invalid Blogger feed");
+    }
+
+    return response.feed.entry || [];
+  }
+
+  function getPostUrl(entry) {
+    return entry.link?.find(link => link.rel === "alternate")?.href || "";
+  }
+
+  function getLabels(entry) {
+    return (entry.category || []).map(category => category.term);
+  }
+
+  function getCover(entry) {
+    const html = entry.content?.$t || "";
+
+    const match = html.match(
+      /<img\b[^>]*?(?:src|data-src)=["']([^"']+)["']/i
+    );
+
+    return match?.[1]?.replace(/&amp;/g, "&");
+  }
+
+  function toSummary(entry) {
+    const title = entry.title?.$t?.trim();
+
+    if (!title) return null;
+
+    const yearMatch = title.match(/\b(19|20)\d{2}\b/);
+
+    return {
+      id: title,
+      title,
+      cover: getCover(entry),
+      year: yearMatch ? Number(yearMatch[0]) : undefined,
+      status: getLabels(entry).includes("مستمر")
+        ? "Ongoing"
+        : getLabels(entry).includes("مكتمل")
+          ? "Completed"
+          : undefined,
+      description: undefined
+    };
+  }
+
+  function getChapterNumber(title) {
+    const match = title.match(
+      /(?:العدد|#)\s*#?\s*(\d+(?:\.\d+)?)/i
+    );
+
+    return match?.[1] || null;
+  }
+
+  const mangaProvider = {
+    id: "comic-verse",
+    name: "Comic Verse",
+
+    async popular(offset) {
+      const entries = await getFeed(
+        `/-/Series?alt=json&max-results=48&start-index=${offset + 1}`
+      );
+
+      return entries
+        .filter(entry => getLabels(entry).includes("Series"))
+        .map(toSummary)
+        .filter(item => item !== null);
+    },
+
+    async search(query, offset) {
+      const entries = await getFeed(
+        `/-/Series?q=${encodeURIComponent(query)}&alt=json&max-results=48&start-index=${offset + 1}`
+      );
+
+      const normalized = query.toLowerCase();
+
+      return entries
+        .filter(entry => getLabels(entry).includes("Series"))
+        .filter(entry =>
+          (entry.title?.$t || "").toLowerCase().includes(normalized)
+        )
+        .map(toSummary)
+        .filter(item => item !== null);
+    },
+
+    async detail(id) {
+      const entries = await getFeed(
+        "/-/Series?alt=json&max-results=500"
+      );
+
+      const entry = entries.find(
+        item => item.title?.$t?.trim() === id
+      );
+
+      return entry ? toSummary(entry) : {
+        id,
+        title: id
+      };
+    },
+
+    async chapters(id) {
+      const entries = await getFeed(
+        `/-/${encodeURIComponent(id)}?alt=json&max-results=150`
+      );
+
+      return entries
+        .filter(entry => getLabels(entry).includes("Chapter"))
+        .map(entry => {
+          const title = entry.title?.$t || "";
+          const url = getPostUrl(entry);
+
+          return {
+            id: url,
+            chapter: getChapterNumber(title),
+            title,
+            pages: 0,
+            language: "ar",
+            publishAt: entry.published?.$t
+          };
+        })
+        .filter(chapter => Boolean(chapter.id));
+    },
+
+    async pageUrls(chapterId) {
+      const response = await harbor.http(chapterId, {
+        responseType: "text",
+        timeoutMs: 30000
+      });
+
+      if (!response.ok) {
+        throw new Error(`Comic Verse: HTTP ${response.status}`);
+      }
+
+      const html = response.body;
+      const tags = html.match(/<img\b[^>]*>/gi) || [];
+      const pages = [];
+
+      for (const tag of tags) {
+        const match = tag.match(
+          /(?:src|data-src|data-original|data-lazy-src)=["']([^"']+)["']/i
+        );
+
+        if (!match) continue;
+
+        const url = match[1].replace(/&amp;/g, "&");
+
+        // Supports 000.jpg, 001a.jpg and P00001.jpg
+        if (!/\/(?:P?\d+[a-z]?)\.(?:jpg|jpeg|png|webp)(?:\?|$)/i.test(url)) {
+          continue;
+        }
+
+        if (!pages.includes(url)) {
+          pages.push(url);
+        }
+      }
+
+      if (pages.length === 0) {
+        throw new Error(
+          "Comic Verse: no comic pages found in this chapter"
+        );
+      }
+
+      return pages;
+    }
+  };
+
+  return { plugin: mangaProvider };
+})();
+
+if (
+  typeof plugin !== "undefined" &&
+  typeof harbor !== "undefined" &&
+  harbor.register
+) {
+  const provider = plugin?.default || plugin?.plugin || plugin;
+
+  if (provider && provider.id && provider.name) {
+    try {
+      harbor.register(provider);
+    } catch (_) {}
+  }
+}
