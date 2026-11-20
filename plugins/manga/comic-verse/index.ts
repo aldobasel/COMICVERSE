@@ -40,9 +40,9 @@ async function getFeed(path = ''): Promise<BloggerEntry[]> {
 function normalizePostUrl(raw: string): string {
   try {
     const url = new URL(raw);
-    return `${url.hostname.replace(/^www\\./i, '').toLowerCase()}${url.pathname.replace(/\\/+$/, '').toLowerCase()}`;
+    return `${url.hostname.replace(/^www\./i, '').toLowerCase()}${url.pathname.replace(/\/+$/, '').toLowerCase()}`;
   } catch {
-    return raw.replace(/[?#].*$/, '').replace(/\\/+$/, '').toLowerCase();
+    return raw.replace(/[?#].*$/, '').replace(/\/+$/, '').toLowerCase();
   }
 }
 
@@ -179,48 +179,66 @@ export const plugin: MangaProvider = {
   async pageUrls(chapterId: string): Promise<string[]> {
     const extractImages = (html: string): string[] => {
       const pages: string[] = [];
-      const readerMarker = html.search(/id=["']cvOriginal["']/i);
-      const readerHtml = readerMarker >= 0 ? html.slice(readerMarker) : html;
-      const tags = readerHtml.match(/<(?:img|a)\b[^>]*>/gi) || [];
+      const seen = new Set<string>();
+      const marker = html.search(/id=["'](?:cvOriginal|cvPages)["']/i);
+      const body = marker >= 0 ? html.slice(marker) : html;
+      const imageLike = (value: string) =>
+        /\.(?:avif|webp|png|jpe?g|gif|bmp|tiff?)(?:[?#]|$)/i.test(value) ||
+        /\/(?:s\d{2,4}|w\d+-h\d+|s\d+-c)(?:\/|$)/i.test(value);
+      const add = (raw: string, force = false) => {
+        let value = raw.replace(/&amp;/gi, '&').replace(/&#38;/g, '&')
+          .replace(/&quot;/gi, '"').replace(/&#39;/g, "'").trim();
+        value = value.replace(/^["']|["']$/g, '');
+        if (!value || /^(?:data:|blob:|javascript:)/i.test(value)) return;
+        if (value.startsWith('//')) value = 'https:' + value;
+        try {
+          const absolute = new URL(value, chapterId).href;
+          if (!/^https?:\/\//i.test(absolute)) return;
+          if (!force && !imageLike(absolute)) return;
+          if (!seen.has(absolute)) { seen.add(absolute); pages.push(absolute); }
+        } catch {}
+      };
+      const tags = body.match(/<(?:img|source|a)\b[^>]*>/gi) || [];
       for (const tag of tags) {
-        const attrs = tag.matchAll(/(?:data-src|data-original|data-lazy-src|src|href)=["']([^"']+)["']/gi);
-        for (const attr of attrs) {
-          const url = attr[1].replace(/&amp;/g, '&').trim();
-          if (!/^https?:\/\//i.test(url)) continue;
-          if (!/(?:blogger\.googleusercontent\.com|bp\.blogspot\.com)/i.test(url)) continue;
-          if (!pages.includes(url)) pages.push(url);
+        const attrs = new Map<string, string>();
+        for (const match of tag.matchAll(/([\w:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g)) {
+          attrs.set(match[1].toLowerCase(), match[2] ?? match[3] ?? match[4] ?? '');
         }
+        const tagName = /^<\s*([a-z]+)/i.exec(tag)?.[1]?.toLowerCase();
+        if (tagName === 'a') {
+          const href = attrs.get('href');
+          if (href) add(href);
+          continue;
+        }
+        for (const key of ['data-original', 'data-src', 'data-lazy-src', 'data-echo', 'data-url', 'src', 'data-srcset', 'srcset']) {
+          const value = attrs.get(key);
+          if (!value) continue;
+          if (key.includes('srcset')) {
+            for (const candidate of value.split(',')) add(candidate.trim().split(/\s+/)[0], true);
+          } else add(value, true);
+        }
+        const style = attrs.get('style') || '';
+        for (const match of style.matchAll(/background-image\s*:\s*url\((?:"|')?([^)"']+)(?:"|')?\)/gi)) add(match[1], true);
       }
       return pages;
     };
 
-    // Prefer the exact post HTML already fetched for the selected series.
     const cachedHtml = chapterHtmlCache.get(normalizePostUrl(chapterId));
     if (cachedHtml) {
       const cachedPages = extractImages(cachedHtml);
       if (cachedPages.length) return cachedPages;
     }
 
-    // Try the chapter page first.
     let pageError = '';
     try {
-      const response = await harbor.http(chapterId, {
-        responseType: 'text',
-        timeoutMs: 30000
-      });
+      const response = await harbor.http(chapterId, { responseType: 'text', timeoutMs: 30000 });
       if (response.ok) {
         const pages = extractImages(response.body || '');
         if (pages.length) return pages;
-        pageError = `chapter page had no reader images (HTTP ${response.status}, body ${(response.body || '').length} chars)`;
-      } else {
-        pageError = `chapter page returned HTTP ${response.status}`;
-      }
-    } catch (error) {
-      pageError = String(error);
-    }
+        pageError = `chapter page had no image elements (HTTP ${response.status}, body ${(response.body || '').length} chars)`;
+      } else pageError = `chapter page returned HTTP ${response.status}`;
+    } catch (error) { pageError = String(error); }
 
-    // Blogger's post feed contains the original post HTML and is a reliable
-    // fallback when the rendered blog page is blocked or transformed.
     try {
       const entries = await getFeed('?alt=json&max-results=500');
       const entry = entries.find(item =>
@@ -229,7 +247,7 @@ export const plugin: MangaProvider = {
       if (entry?.content?.$t) {
         const pages = extractImages(entry.content.$t);
         if (pages.length) return pages;
-        throw new Error('matching Blogger feed entry contains no reader images');
+        throw new Error('matching Blogger feed entry contains no image elements');
       }
       throw new Error('chapter URL not found in Blogger post feed');
     } catch (error) {
