@@ -80,7 +80,7 @@ let chapterProvider;
 const chapterHost = {
   async http(url, options) {
     if (options.responseType === "text") {
-      return { ok: true, status: 200, body: "<html>series fixture</html>" };
+      return { ok: true, status: 200, body: '<div id="clwd"><script>clwd.run("SCRIPT-LABEL")</script></div>' };
     }
     feedCalls.push(String(url));
     const parsed = new URL(String(url));
@@ -106,7 +106,7 @@ new Function("harbor", bundle)(chapterHost);
 const chapters = await chapterProvider.chapters(seriesUrl);
 assert.equal(chapters.length, 151);
 assert.equal(feedCalls.length, 2);
-assert.ok(feedCalls[0].includes("/-/Chapter/SAMPLE-SERIES"));
+assert.ok(feedCalls[0].includes("/-/Chapter/SCRIPT-LABEL"), "the #clwd script feed must take precedence over data-label");
 assert.equal(new URL(feedCalls[0]).searchParams.get("start-index"), "1");
 assert.equal(new URL(feedCalls[1]).searchParams.get("start-index"), "151");
 
