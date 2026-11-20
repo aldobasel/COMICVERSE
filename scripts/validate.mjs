@@ -7,7 +7,7 @@ const manifest = JSON.parse(await readFile("plugins/manga/comic-verse/manifest.j
 const repoIndex = JSON.parse(await readFile("dist/manga/repo.json", "utf8"));
 
 assert.equal(source, bundle, "published bundle must match the source file exactly");
-assert.equal(manifest.version, "1.1.0");
+assert.equal(manifest.version, "1.2.0");
 assert.equal(repoIndex.plugins[0].version, manifest.version);
 assert.equal(repoIndex.plugins[0].entry, "comic-verse.plugin.js");
 
@@ -23,31 +23,30 @@ for (const method of ["popular", "search", "detail", "chapters", "pageUrls"]) {
   assert.equal(typeof registered[method], "function", method + " must exist");
 }
 
-// Reader parity smoke test: request the chapter HTML, parse it, and select
-// #cvOriginal img[src] in document order.
+// Reader parity regression: Harbor drops CSS-hidden nodes while parsing a full page.
+// Mihon's Jsoup keeps #cvOriginal, so isolate that element before Harbor parses it.
 const chapterUrl = "https://arcomixverse.blogspot.com/2025/11/8_25.html";
 let httpRequest;
 let parsedHtml;
+const fullChapterHtml = '<html><head><style>#cvOriginal{display:none}</style></head><body>' +
+  '<div id="cvOriginal"><div class="separator"><a><img src="https://cdn.example/001.jpg"></a></div>' +
+  '<div class="separator"><img src="/images/002.jpg"></div></div><div id="cv-original"></div></body></html>';
 const readerHost = {
-  register() {},
   async http(url, options) {
     httpRequest = { url, options };
-    return { ok: true, status: 200, body: "<html>reader fixture</html>" };
+    return { ok: true, status: 200, body: fullChapterHtml };
   },
   async parseHtml(html) {
     parsedHtml = html;
+    assert.ok(html.startsWith('<div id="cvOriginal">'), "only the #cvOriginal element should be parsed");
+    assert.ok(!html.includes("<style"), "page CSS must not hide the Mihon reader container");
     return {
-      querySelector(selector) {
-        assert.equal(selector, "#cvOriginal");
-        return {
-          querySelectorAll(imageSelector) {
-            assert.equal(imageSelector, "img[src]");
-            return [
-              { attr(name) { return name === "src" ? "https://cdn.example/001.jpg" : null; } },
-              { attr(name) { return name === "src" ? "/images/002.jpg" : null; } }
-            ];
-          }
-        };
+      querySelectorAll(selector) {
+        assert.equal(selector, "img[src]");
+        return [
+          { attr(name) { return name === "src" ? "https://cdn.example/001.jpg" : null; } },
+          { attr(name) { return name === "src" ? "/images/002.jpg" : null; } }
+        ];
       }
     };
   }
@@ -64,8 +63,7 @@ assert.deepEqual(pages, [
 ]);
 assert.equal(httpRequest.url, chapterUrl);
 assert.equal(httpRequest.options.responseType, "text");
-assert.equal(parsedHtml, "<html>reader fixture</html>");
-
+assert.equal(parsedHtml, '<div id="cvOriginal"><div class="separator"><a><img src="https://cdn.example/001.jpg"></a></div><div class="separator"><img src="/images/002.jpg"></div></div>');
 // Chapter-feed smoke test: use the series page's data-label and fetch every
 // Blogger page until openSearch$totalResults has been reached.
 const seriesUrl = "https://arcomixverse.blogspot.com/2025/01/sample-series.html";
