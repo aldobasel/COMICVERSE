@@ -147,45 +147,27 @@ var plugin = (() => {
       const html = response.body || "";
       const marker = html.search(/id=["']cvOriginal["']/i);
       const readerHtml = marker >= 0 ? html.slice(marker) : html;
-      const tags = readerHtml.match(/<img\b[^>]*>/gi) || [];
+      const tags = readerHtml.match(/<img\\b[^>]*>/gi) || [];
       const pages = [];
 
       for (const tag of tags) {
         const match = tag.match(
           /(?:data-src|data-original|data-lazy-src|src)=["']([^"']+)["']/i
         );
-
         if (!match) continue;
 
-        let url = match[1].replace(/&amp;/g, "&").trim();
-        if (!url || url.startsWith("data:")) continue;
-
-        try {
-          url = new URL(url, chapterId).href;
-        } catch (_) {
-          continue;
-        }
-
-        // Keep actual reader images; do not assume that every comic numbers files the same way.
-        const isImage = /\.(?:jpe?g|png|webp|gif)(?:[?#]|$)/i.test(url);
-        const isBloggerImage = /(?:blogger\.googleusercontent\.com|bp\.blogspot\.com)/i.test(url);
-
-        if (!isImage && !isBloggerImage) continue;
-
-        if (!pages.includes(url)) {
-          pages.push(url);
-        }
+        const url = match[1].replace(/&amp;/g, "&").trim();
+        if (!/^https?:\\/\\//i.test(url)) continue;
+        if (!/(?:blogger\\.googleusercontent\\.com|bp\\.blogspot\\.com)/i.test(url)) continue;
+        if (!pages.includes(url)) pages.push(url);
       }
 
       if (pages.length === 0) {
-        throw new Error(
-          "Comic Verse: no reader images found in this chapter"
-        );
+        throw new Error("Comic Verse: no Blogger reader images found");
       }
 
       return pages;
     }
-  };
 
   return { plugin: mangaProvider };
 })();
