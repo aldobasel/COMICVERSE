@@ -154,38 +154,58 @@ export const plugin: MangaProvider = {
   },
 
   async pageUrls(chapterId: string): Promise<string[]> {
-    const response = await harbor.http(chapterId, {
-      responseType: 'text',
-      timeoutMs: 30000
-    });
+    const extractImages = (html: string): string[] => {
+      const pages: string[] = [];
+      const readerMarker = html.search(/id=["']cvOriginal["']/i);
+      const readerHtml = readerMarker >= 0 ? html.slice(readerMarker) : html;
+      const tags = readerHtml.match(/<(?:img|a)\\b[^>]*>/gi) || [];
+      for (const tag of tags) {
+        const attrs = tag.matchAll(/(?:data-src|data-original|data-lazy-src|src|href)=["']([^"']+)["']/gi);
+        for (const attr of attrs) {
+          const url = attr[1].replace(/&amp;/g, '&').trim();
+          if (!/^https?:\\/\\//i.test(url)) continue;
+          if (!/(?:blogger\\.googleusercontent\\.com|bp\\.blogspot\\.com)/i.test(url)) continue;
+          if (!pages.includes(url)) pages.push(url);
+        }
+      }
+      return pages;
+    };
 
-    if (!response.ok) {
-      throw new Error(`Comic Verse: HTTP ${response.status}`);
+    // Try the chapter page first.
+    let pageError = '';
+    try {
+      const response = await harbor.http(chapterId, {
+        responseType: 'text',
+        timeoutMs: 30000
+      });
+      if (response.ok) {
+        const pages = extractImages(response.body || '');
+        if (pages.length) return pages;
+        pageError = `chapter page had no reader images (HTTP ${response.status}, body ${(response.body || '').length} chars)`;
+      } else {
+        pageError = `chapter page returned HTTP ${response.status}`;
+      }
+    } catch (error) {
+      pageError = String(error);
     }
 
-    const html = response.body || '';
-    const marker = html.search(/id=["']cvOriginal["']/i);
-    const readerHtml = marker >= 0 ? html.slice(marker) : html;
-    const tags = readerHtml.match(/<img\b[^>]*>/gi) || [];
-    const pages: string[] = [];
-
-    for (const tag of tags) {
-      const match = tag.match(
-        /(?:data-src|data-original|data-lazy-src|src)=["']([^"']+)["']/i
+    // Blogger's post feed contains the original post HTML and is a reliable
+    // fallback when the rendered blog page is blocked or transformed.
+    try {
+      const entries = await getFeed('?alt=json&max-results=500');
+      const normalize = (url: string) => url.replace(/\\/$/, '').toLowerCase();
+      const entry = entries.find(item =>
+        item.link?.some(link => link.rel === 'alternate' && normalize(link.href) === normalize(chapterId))
       );
-      if (!match) continue;
-
-      const url = match[1].replace(/&amp;/g, '&').trim();
-      if (!/^https?:\/\//i.test(url)) continue;
-      if (!/(?:blogger\.googleusercontent\.com|bp\.blogspot\.com)/i.test(url)) continue;
-      if (!pages.includes(url)) pages.push(url);
+      if (entry?.content?.$t) {
+        const pages = extractImages(entry.content.$t);
+        if (pages.length) return pages;
+        throw new Error('matching Blogger feed entry contains no reader images');
+      }
+      throw new Error('chapter URL not found in Blogger post feed');
+    } catch (error) {
+      throw new Error(`Comic Verse: ${pageError}; feed fallback: ${String(error)}`);
     }
-
-    if (pages.length === 0) {
-      throw new Error('Comic Verse: no Blogger reader images found');
-    }
-
-    return pages;
   }
 };
 
