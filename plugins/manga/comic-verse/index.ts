@@ -166,7 +166,7 @@ export const plugin: MangaProvider = {
     const html = response.body || '';
     const marker = html.search(/id=["']cvOriginal["']/i);
     const readerHtml = marker >= 0 ? html.slice(marker) : html;
-    const tags = readerHtml.match(/<img\\b[^>]*>/gi) || [];
+    const tags = readerHtml.match(/<img\b[^>]*>/gi) || [];
     const pages: string[] = [];
 
     for (const tag of tags) {
@@ -186,8 +186,8 @@ export const plugin: MangaProvider = {
       }
 
       // Keep actual reader images; do not assume that every comic numbers files the same way.
-      const isImage = /\\.(?:jpe?g|png|webp|gif)(?:[?#]|$)/i.test(url);
-      const isBloggerImage = /(?:blogger\\.googleusercontent\\.com|bp\\.blogspot\\.com)/i.test(url);
+      const isImage = /\.(?:jpe?g|png|webp|gif)(?:[?#]|$)/i.test(url);
+      const isBloggerImage = /(?:blogger\.googleusercontent\.com|bp\.blogspot\.com)/i.test(url);
 
       if (!isImage && !isBloggerImage) continue;
 
