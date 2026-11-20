@@ -1,3 +1,7 @@
+{
+  "name": "Comic Verse",
+  "description": "Arabic comics from Comic Verse",
+  "plugins": [
     {
       "id": "comic-verse",
       "name": "Comic Verse",
