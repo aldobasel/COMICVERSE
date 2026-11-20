@@ -7,7 +7,7 @@ const manifest = JSON.parse(await readFile("plugins/manga/comic-verse/manifest.j
 const repoIndex = JSON.parse(await readFile("dist/manga/repo.json", "utf8"));
 
 assert.equal(source, bundle, "published bundle must match the source file exactly");
-assert.equal(manifest.version, "1.2.0");
+assert.equal(manifest.version, "1.3.0");
 assert.equal(repoIndex.plugins[0].version, manifest.version);
 assert.equal(repoIndex.plugins[0].entry, "comic-verse.plugin.js");
 
@@ -27,7 +27,6 @@ for (const method of ["popular", "search", "detail", "chapters", "pageUrls"]) {
 // Mihon's Jsoup keeps #cvOriginal, so isolate that element before Harbor parses it.
 const chapterUrl = "https://arcomixverse.blogspot.com/2025/11/8_25.html";
 let httpRequest;
-let parsedHtml;
 const fullChapterHtml = '<html><head><style>#cvOriginal{display:none}</style></head><body>' +
   '<div id="cvOriginal"><div class="separator"><a><img src="https://cdn.example/001.jpg"></a></div>' +
   '<div class="separator"><img src="/images/002.jpg"></div></div><div id="cv-original"></div></body></html>';
@@ -36,20 +35,7 @@ const readerHost = {
     httpRequest = { url, options };
     return { ok: true, status: 200, body: fullChapterHtml };
   },
-  async parseHtml(html) {
-    parsedHtml = html;
-    assert.ok(html.startsWith('<div id="cvOriginal">'), "only the #cvOriginal element should be parsed");
-    assert.ok(!html.includes("<style"), "page CSS must not hide the Mihon reader container");
-    return {
-      querySelectorAll(selector) {
-        assert.equal(selector, "img[src]");
-        return [
-          { attr(name) { return name === "src" ? "https://cdn.example/001.jpg" : null; } },
-          { attr(name) { return name === "src" ? "/images/002.jpg" : null; } }
-        ];
-      }
-    };
-  }
+  async parseHtml() { throw new Error("pageUrls must not parse/sanitize the reader fragment"); }
 };
 let readerProvider;
 new Function("harbor", bundle)({
