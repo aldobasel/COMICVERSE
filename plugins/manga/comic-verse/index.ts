@@ -187,5 +187,6 @@ export const plugin: MangaProvider = {
 
     return pages;
   }
+};
 
 harbor.register(plugin);
