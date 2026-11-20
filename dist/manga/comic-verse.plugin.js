@@ -144,23 +144,33 @@ var plugin = (() => {
         throw new Error(`Comic Verse: HTTP ${response.status}`);
       }
 
-      const html = response.body;
-      const tags = html.match(/<img\b[^>]*>/gi) || [];
+      const html = response.body || "";
+      const marker = html.search(/id=["']cvOriginal["']/i);
+      const readerHtml = marker >= 0 ? html.slice(marker) : html;
+      const tags = readerHtml.match(/<img\\b[^>]*>/gi) || [];
       const pages = [];
 
       for (const tag of tags) {
         const match = tag.match(
-          /(?:src|data-src|data-original|data-lazy-src)=["']([^"']+)["']/i
+          /(?:data-src|data-original|data-lazy-src|src)=["']([^"']+)["']/i
         );
 
         if (!match) continue;
 
-        const url = match[1].replace(/&amp;/g, "&");
+        let url = match[1].replace(/&amp;/g, "&").trim();
+        if (!url || url.startsWith("data:")) continue;
 
-        // Supports 000.jpg, 001a.jpg and P00001.jpg
-        if (!/\/(?:P?\d+[a-z]?)\.(?:jpg|jpeg|png|webp)(?:\?|$)/i.test(url)) {
+        try {
+          url = new URL(url, chapterId).href;
+        } catch (_) {
           continue;
         }
+
+        // Keep actual reader images; do not assume that every comic numbers files the same way.
+        const isImage = /\\.(?:jpe?g|png|webp|gif)(?:[?#]|$)/i.test(url);
+        const isBloggerImage = /(?:blogger\\.googleusercontent\\.com|bp\\.blogspot\\.com)/i.test(url);
+
+        if (!isImage && !isBloggerImage) continue;
 
         if (!pages.includes(url)) {
           pages.push(url);
@@ -169,7 +179,7 @@ var plugin = (() => {
 
       if (pages.length === 0) {
         throw new Error(
-          "Comic Verse: no comic pages found in this chapter"
+          "Comic Verse: no reader images found in this chapter"
         );
       }
 
