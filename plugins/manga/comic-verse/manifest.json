@@ -1,7 +1,7 @@
 {
   "id": "comic-verse",
   "name": "Comic Verse",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "lang": "ar",
   "nsfw": false,
   "entry": "comic-verse.plugin.js",
