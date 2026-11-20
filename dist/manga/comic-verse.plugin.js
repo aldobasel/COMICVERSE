@@ -147,7 +147,7 @@ var plugin = (() => {
       const html = response.body || "";
       const marker = html.search(/id=["']cvOriginal["']/i);
       const readerHtml = marker >= 0 ? html.slice(marker) : html;
-      const tags = readerHtml.match(/<img\\b[^>]*>/gi) || [];
+      const tags = readerHtml.match(/<img\b[^>]*>/gi) || [];
       const pages = [];
 
       for (const tag of tags) {
@@ -157,8 +157,8 @@ var plugin = (() => {
         if (!match) continue;
 
         const url = match[1].replace(/&amp;/g, "&").trim();
-        if (!/^https?:\\/\\//i.test(url)) continue;
-        if (!/(?:blogger\\.googleusercontent\\.com|bp\\.blogspot\\.com)/i.test(url)) continue;
+        if (!/^https?:\/\//i.test(url)) continue;
+        if (!/(?:blogger\.googleusercontent\.com|bp\.blogspot\.com)/i.test(url)) continue;
         if (!pages.includes(url)) pages.push(url);
       }
 
