@@ -135,35 +135,44 @@ var plugin = (() => {
     },
 
     async pageUrls(chapterId) {
-      const response = await harbor.http(chapterId, {
-        responseType: "text",
-        timeoutMs: 30000
-      });
-
-      if (!response.ok) {
-        throw new Error(`Comic Verse: HTTP ${response.status}`);
+      harbor.log("[Comic Verse] pageUrls start", chapterId);
+      let response;
+      try {
+        response = await harbor.http(chapterId, {
+          responseType: "text",
+          timeoutMs: 30000
+        });
+      } catch (error) {
+        harbor.log("[Comic Verse] chapter request failed", String(error));
+        throw new Error("Comic Verse: chapter request failed: " + String(error));
       }
 
       const html = response.body || "";
       const marker = html.search(/id=["']cvOriginal["']/i);
+      harbor.log("[Comic Verse] response", response.status, "length", html.length, "reader marker", marker);
+
+      if (!response.ok) {
+        throw new Error("Comic Verse: HTTP " + response.status);
+      }
+
       const readerHtml = marker >= 0 ? html.slice(marker) : html;
-      const tags = readerHtml.match(/<img\b[^>]*>/gi) || [];
+      const tags = readerHtml.match(/<(?:img|a)\b[^>]*>/gi) || [];
       const pages = [];
 
       for (const tag of tags) {
-        const match = tag.match(
-          /(?:data-src|data-original|data-lazy-src|src)=["']([^"']+)["']/i
-        );
-        if (!match) continue;
-
-        const url = match[1].replace(/&amp;/g, "&").trim();
-        if (!/^https?:\/\//i.test(url)) continue;
-        if (!/(?:blogger\.googleusercontent\.com|bp\.blogspot\.com)/i.test(url)) continue;
-        if (!pages.includes(url)) pages.push(url);
+        const attrs = tag.matchAll(/(?:data-src|data-original|data-lazy-src|src|href)=["']([^"']+)["']/gi);
+        for (const match of attrs) {
+          const url = match[1].replace(/&amp;/g, "&").trim();
+          if (!/^https?:\/\//i.test(url)) continue;
+          if (!/(?:blogger\.googleusercontent\.com|bp\.blogspot\.com)/i.test(url)) continue;
+          if (!pages.includes(url)) pages.push(url);
+        }
       }
 
+      harbor.log("[Comic Verse] reader tags", tags.length, "image urls", pages.length, "first urls", pages.slice(0, 3));
+
       if (pages.length === 0) {
-        throw new Error("Comic Verse: no Blogger reader images found");
+        throw new Error("Comic Verse: no Blogger reader images found (html=" + html.length + ", marker=" + marker + ", tags=" + tags.length + ")");
       }
 
       return pages;
