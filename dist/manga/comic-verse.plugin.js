@@ -168,6 +168,7 @@ var plugin = (() => {
 
       return pages;
     }
+  };
 
   return { plugin: mangaProvider };
 })();
