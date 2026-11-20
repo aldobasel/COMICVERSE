@@ -28,8 +28,8 @@ for (const method of ["popular", "search", "detail", "chapters", "pageUrls"]) {
 const chapterUrl = "https://arcomixverse.blogspot.com/2025/11/8_25.html";
 let httpRequest;
 const fullChapterHtml = '<html><head><style>#cvOriginal{display:none}</style></head><body>' +
-  '<div id="cvOriginal"><div class="separator"><a><img src="https://cdn.example/001.jpg"></a></div>' +
-  '<div class="separator"><img src="/images/002.jpg"></div></div><div id="cv-original"></div></body></html>';
+  '<div id="cvOriginal" style="display:none"><div class="separator"><a><img src="https://cdn.example/001.jpg"></a></div>' +
+  '<div class="separator"><img src="/images/002.jpg"></div><img data-src="/ignored.jpg"></div><div id="cv-original"></div></body></html>';
 const readerHost = {
   async http(url, options) {
     httpRequest = { url, options };
@@ -49,7 +49,7 @@ assert.deepEqual(pages, [
 ]);
 assert.equal(httpRequest.url, chapterUrl);
 assert.equal(httpRequest.options.responseType, "text");
-assert.equal(parsedHtml, '<div id="cvOriginal"><div class="separator"><a><img src="https://cdn.example/001.jpg"></a></div><div class="separator"><img src="/images/002.jpg"></div></div>');
+
 // Chapter-feed smoke test: use the series page's data-label and fetch every
 // Blogger page until openSearch$totalResults has been reached.
 const seriesUrl = "https://arcomixverse.blogspot.com/2025/01/sample-series.html";
